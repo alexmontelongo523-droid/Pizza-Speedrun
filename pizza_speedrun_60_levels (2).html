@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pizza Speedrun</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#171a1f;color:#fff;font-family:Arial,sans-serif}
+#app{max-width:900px;margin:auto;padding:18px}
+header{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+h1{margin:0}.tabs{display:flex;gap:7px;flex-wrap:wrap;margin:14px 0}
+button{border:0;border-radius:8px;padding:10px 14px;font-weight:bold;cursor:pointer;background:#eee;color:#171a1f}
+button.active{background:#f2c94c}.hidden{display:none}
+.panel{background:#22272e;border:1px solid #3b4149;border-radius:14px;padding:16px}
+.levels{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
+.level-card{padding:14px;background:#30363e;border-radius:10px;text-align:center}
+.level-card small{display:block;color:#aaa;margin:5px 0 10px}
+#hud{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+#board{display:grid;gap:3px;padding:8px;background:#090b0e;border:2px solid #444;border-radius:12px;width:max-content;margin:auto}
+.cell{width:46px;height:46px;background:#e7e2dc;border:1px solid #aaa;border-radius:5px;display:grid;place-items:center}
+.wall{background:#e87559;border-color:#b84937}.goal{box-shadow:inset 0 0 0 4px #f1c94a;background:#fff0cf}
+.pizza{font-size:27px}.player{width:32px;height:32px;border-radius:9px;background:var(--skin,#e05a4f);border:2px solid #8d3730;position:relative}
+.eye{position:absolute;top:6px;width:7px;height:8px;background:#fff;border-radius:50%}.eye:after{content:"";position:absolute;width:3px;height:3px;background:#222;border-radius:50%;left:2px;top:2px}
+.eye.l{left:6px}.eye.r{right:6px}.mouth{position:absolute;left:12px;bottom:5px;width:7px;height:4px;background:#702620;border-radius:50%}
+.eye.sleepy{height:3px;top:9px}.eye.goofy{width:9px;height:6px;top:8px}.eye.round{width:8px;height:8px}.eye.robot{border-radius:2px;background:#222}
+.mouth.flat{height:2px;border-radius:0}.mouth.open{height:8px;width:8px;left:11px}.mouth.robot{height:6px;width:9px;left:11px;border-radius:2px;background:#222}
+#message{text-align:center;min-height:24px;margin:12px;font-weight:bold}
+.controls{display:grid;grid-template-columns:repeat(3,48px);gap:5px;width:max-content;margin:12px auto}.controls button{width:48px;height:48px;padding:0}.controls button:nth-child(1){grid-column:2}.controls button:nth-child(2){grid-column:1}.controls button:nth-child(3){grid-column:2}.controls button:nth-child(4){grid-column:3}
+.shop{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}.skin{background:#30363e;padding:14px;border-radius:12px;text-align:center}.skin-preview{width:55px;height:55px;border-radius:14px;margin:0 auto 8px;border:3px solid #222}
+.locked{opacity:.55}.owned{outline:2px solid #f2c94c}
+.leader{color:#aaa;font-size:13px}
+@media(max-width:520px){#board{grid-template-columns:repeat(9,8vw);padding:5px}.cell{width:8vw;height:8vw}.player{width:70%;height:70%}.pizza{font-size:5vw}}
+</style>
+</head>
+<body>
+<div id="app">
+<header><h1>🍕 Pizza Speedrun</h1><strong>🍕 Bank: <span id="bank">0</span></strong></header>
+<div class="tabs">
+<button id="tabLevels" class="active">Levels</button><button id="tabGame">Play</button><button id="tabShop">Shop</button>
+</div>
+
+<section id="levels" class="panel">
+<h2>Choose a Level — 60 Total</h2>
+<p>Replay any unlocked level and try to beat your best time.</p>
+<div id="levelList" class="levels"></div>
+</section>
+
+<section id="game" class="panel hidden">
+<div id="hud"><strong id="levelName">Level 1</strong><strong>⏱ <span id="timer">0.00</span>s</strong><strong>🍕 <span id="runPizzas">0</span></strong></div>
+<div id="board"></div>
+<div id="message">Collect every pizza, then reach the goal!</div>
+<div class="controls">
+<button data-move="up">▲</button><button data-move="left">◀</button><button data-move="down">▼</button><button data-move="right">▶</button>
+</div>
+<div style="text-align:center"><button id="restart">Restart Run</button> <button id="back">Level Select</button></div>
+</section>
+
+<section id="shop" class="panel hidden">
+<h2>🛒 Skin Shop</h2><p>Buy skins using pizzas earned from completed levels.</p>
+<div id="shopList" class="shop"></div>
+<hr style="margin:20px 0;border-color:#444">
+<h2>🎭 Custom Face</h2>
+<p>Custom Face costs <b>5 pizzas</b> to unlock. Then mix and match eyes and mouths.</p>
+<div id="faceEditor"></div>
+</section>
+</div>
+
+<script>
+const levels=[];
+function makeLevel(i){
+  const start=[7,1], goal=[1,7];
+  const candidates=[];
+  // Deterministic candidate walls; regenerate if they make any required tile unreachable.
+  for(let r=0;r<9;r++) for(let c=0;c<9;c++){
+    const k=r+","+c;
+    if((r+c+i*3)%8===0 && k!=="7,1" && k!=="1,7") candidates.push(k);
+    if((r*3+c*5+i)%17===0 && k!=="7,1" && k!=="1,7") candidates.push(k);
+  }
+  const walls=[...new Set(candidates)].filter(k=>{
+    const [r,c]=k.split(',').map(Number);
+    return !(r<=1&&c<=2) && !(r>=7&&c<=2) && !(r<=1&&c>=6);
+  }).slice(0,10+(i%7));
+  function reachable(wallSet){
+    const seen=new Set([start.join(',')]), q=[start];
+    while(q.length){const [r,c]=q.shift(); for(const [dr,dc] of [[1,0],[-1,0],[0,1],[0,-1]]){
+      const nr=r+dr,nc=c+dc,k=nr+","+nc;
+      if(nr>=0&&nr<9&&nc>=0&&nc<9&&!wallSet.has(k)&&!seen.has(k)){seen.add(k);q.push([nr,nc]);}
+    }}
+    return seen;
+  }
+  let wallSet=new Set(walls), seen=reachable(wallSet);
+  // Remove walls that disconnect the goal.
+  for(const k of [...wallSet]){
+    if(!seen.has(goal.join(','))){wallSet.delete(k);seen=reachable(wallSet);}
+  }
+  const safe=[];
+  for(let r=1;r<8;r++) for(let c=1;c<8;c++){
+    const k=r+","+c;
+    if(!wallSet.has(k)&&seen.has(k)&&k!==start.join(',')&&k!==goal.join(',')) safe.push([r,c]);
+  }
+  const count=4+(i%5), pizzas=[];
+  for(let j=0;j<count;j++) pizzas.push(safe[(j*7+i*11)%safe.length]);
+  return {n:i+1,name:["Warm-Up","Pizza Alley","Crossroads","Red Maze","Final Rush"][i%5]+" "+(i+1),p:pizzas,s:start,g:goal,w:[...wallSet]};
+}
+for(let i=0;i<60;i++) levels.push(makeLevel(i));
+
+const skins=[
+{name:"Classic",price:0,color:"#e05a4f"},
+{name:"Blueberry",price:10,color:"#5b7cfa"},
+{name:"Mint",price:20,color:"#55cfa2"},
+{name:"Golden",price:35,color:"#f2bd3d"},
+{name:"Shadow",price:55,color:"#5d626b"}
+];
+const faceStyles=[
+  {name:"Happy",eyes:"happy",mouth:"smile"},
+  {name:"Sleepy",eyes:"sleepy",mouth:"flat"},
+  {name:"Goofy",eyes:"goofy",mouth:"open"},
+  {name:"Surprised",eyes:"round",mouth:"open"},
+  {name:"Robot",eyes:"robot",mouth:"robot"}
+];
+let unlocked=1,bank=0,owned=new Set([0]),selectedSkin=0,best={},levelIndex=0,player={},pizzas=new Set(),running=false,won=false,startTime=0,raf=0,runPizzaCount=0;
+let face={eyes:"happy",mouth:"smile"};
+let saveKey="pizzaSpeedrunSaveV2";
+function saveProgress(){
+  try{
+    localStorage.setItem(saveKey,JSON.stringify({unlocked,bank,owned:[...owned],selectedSkin,best,levelIndex,face}));
+  }catch(e){
+    // Downloaded file:// pages may restrict persistent storage; gameplay still works.
+  }
+}
+function loadProgress(){
+  try{
+    const s=JSON.parse(localStorage.getItem(saveKey)||"null");
+    if(!s)return;
+    unlocked=Math.max(1,Math.min(60,s.unlocked||1));
+    bank=Math.max(0,s.bank||0);
+    owned=new Set(Array.isArray(s.owned)?s.owned:[0]);
+    selectedSkin=Number.isInteger(s.selectedSkin)?s.selectedSkin:0;
+    best=s.best||{};
+    levelIndex=Math.max(0,Math.min(59,s.levelIndex||0));
+    face=s.face||face;
+  }catch(e){}
+}
+loadProgress();
+
+const $=id=>document.getElementById(id);
+function show(which){["levels","game","shop"].forEach(x=>$(x).classList.toggle("hidden",x!==which));["tabLevels","tabGame","tabShop"].forEach(x=>$(x).classList.remove("active"));$(which==="levels"?"tabLevels":which==="game"?"tabGame":"tabShop").classList.add("active")}
+$("tabLevels").onclick=()=>{stopTimer();renderLevels();show("levels")};
+$("tabGame").onclick=()=>{startLevel(levelIndex);show("game")};
+$("tabShop").onclick=()=>{renderShop();show("shop")};
+
+function renderLevels(){
+$("levelList").innerHTML="";
+levels.forEach((l,i)=>{
+const d=document.createElement("div");d.className="level-card";
+const locked=i>=unlocked;
+d.innerHTML=`<b>Level ${l.n}</b><div>${l.name}</div><small>${locked?"🔒 Locked":(best[i]!=null?"Best: "+best[i].toFixed(2)+"s":"No time yet")}</small>`;
+const b=document.createElement("button");b.textContent=locked?"Locked":"Play";
+b.disabled=locked;b.onclick=()=>{levelIndex=i;startLevel(i);show("game")};d.appendChild(b);$("levelList").appendChild(d);
+});
+}
+function renderFaceEditor(){
+  const box=$("faceEditor");
+  let unlockedFace=false;
+  try{ unlockedFace=localStorage.getItem("customFaceUnlocked")==="1"; }catch(e){}
+  if(!unlockedFace){
+    box.innerHTML=`<div class="panel"><b>🎨 Custom Face — 🍕 5</b><br><button id="unlockFace" style="margin-top:10px" ${bank<5?"disabled":""}>Unlock</button></div>`;
+    $("unlockFace").onclick=()=>{if(bank>=5){bank-=5;try{localStorage.setItem("customFaceUnlocked","1");}catch(e){} saveProgress();renderShop();}};
+    return;
+  }
+  box.innerHTML=`<div class="panel">
+    <b>Eyes</b><div class="tabs" id="eyesChoices"></div>
+    <b>Mouth</b><div class="tabs" id="mouthChoices"></div>
+    <button id="saveFace">Save Face</button>
+  </div>`;
+  ["happy","sleepy","goofy","round","robot"].forEach(x=>{
+    const b=document.createElement("button");b.textContent=x;b.className=face.eyes===x?"active":"";
+    b.onclick=()=>{face.eyes=x;renderFaceEditor()};$("eyesChoices").appendChild(b);
+  });
+  ["smile","flat","open","robot"].forEach(x=>{
+    const b=document.createElement("button");b.textContent=x;b.className=face.mouth===x?"active":"";
+    b.onclick=()=>{face.mouth=x;renderFaceEditor()};$("mouthChoices").appendChild(b);
+  });
+  $("saveFace").onclick=()=>{saveProgress();startLevel(levelIndex);show("game")};
+}
+function renderShop(){
+$("bank").textContent=bank;$("shopList").innerHTML="";
+skins.forEach((s,i)=>{
+const d=document.createElement("div");d.className="skin "+(owned.has(i)?"owned":"")+(bank<s.price&&!owned.has(i)?" locked":"");
+d.innerHTML=`<div class="skin-preview" style="background:${s.color}"></div><b>${s.name}</b><p>${owned.has(i)?"Owned":`🍕 ${s.price}`}</p>`;
+const b=document.createElement("button");
+if(owned.has(i)){b.textContent=selectedSkin===i?"Equipped":"Equip";b.disabled=selectedSkin===i;b.onclick=()=>{selectedSkin=i;saveProgress();renderShop()} }
+else{b.textContent="Buy";b.disabled=bank<s.price;b.onclick=()=>{bank-=s.price;owned.add(i);selectedSkin=i;saveProgress();renderShop()}}
+d.appendChild(b);$("shopList").appendChild(d);
+});
+renderFaceEditor();
+}
+function startLevel(i){
+stopTimer();levelIndex=i;saveProgress();const l=levels[i];player={r:l.s[0],c:l.s[1]};pizzas=new Set(l.p.map(x=>x.join(",")));runPizzaCount=0;won=false;running=true;startTime=performance.now();$("levelName").textContent=`Level ${l.n}: ${l.name}`;$("message").textContent="Collect every pizza, then reach the goal!";draw();tick();
+}
+function stopTimer(){running=false;if(raf)cancelAnimationFrame(raf)}
+function tick(){if(!running)return;$("timer").textContent=((performance.now()-startTime)/1000).toFixed(2);raf=requestAnimationFrame(tick)}
+function draw(){
+const l=levels[levelIndex];$("board").style.gridTemplateColumns=`repeat(9,46px)`;$("board").innerHTML="";
+for(let r=0;r<9;r++)for(let c=0;c<9;c++){
+const cell=document.createElement("div");cell.className="cell";const k=r+","+c;
+if(l.w.includes(k))cell.classList.add("wall");if(r===l.g[0]&&c===l.g[1])cell.classList.add("goal");
+if(pizzas.has(k)){const p=document.createElement("span");p.className="pizza";p.textContent="🍕";cell.appendChild(p)}
+if(player.r===r&&player.c===c){const p=document.createElement("div");p.className="player";p.style.setProperty("--skin",skins[selectedSkin].color);p.innerHTML=`<span class="eye l ${face.eyes}"></span><span class="eye r ${face.eyes}"></span><span class="mouth ${face.mouth}"></span>`;cell.appendChild(p)}
+$("board").appendChild(cell);
+}
+$("runPizzas").textContent=runPizzaCount;
+}
+function move(dr,dc){
+if(!running||won)return;const l=levels[levelIndex],nr=player.r+dr,nc=player.c+dc,k=nr+","+nc;
+if(nr<0||nr>=9||nc<0||nc>=9||l.w.includes(k))return;
+player={r:nr,c:nc};if(pizzas.delete(k)){runPizzaCount++;$("runPizzas").textContent=runPizzaCount}
+if(player.r===l.g[0]&&player.c===l.g[1]){
+if(pizzas.size===0)finish();else $("message").textContent=`Need ${pizzas.size} more pizza${pizzas.size===1?"":"s"}!`;
+}else $("message").textContent=pizzas.size===0?"All pizzas! Get to the goal!":"Keep moving!";
+draw();
+}
+function finish(){
+won=true;running=false;cancelAnimationFrame(raf);
+const time=(performance.now()-startTime)/1000, old=best[levelIndex];
+best[levelIndex]=old==null?time:Math.min(old,time);
+bank+=runPizzaCount;
+if(levelIndex+1<levels.length)unlocked=Math.max(unlocked,levelIndex+2);
+saveProgress();
+renderLevels();
+if(levelIndex+1<levels.length){
+  $("message").textContent=`🎉 ${time.toFixed(2)}s! +${runPizzaCount} pizzas. Next level!`;
+  setTimeout(()=>{levelIndex++;saveProgress();startLevel(levelIndex);},900);
+}else{
+  $("message").textContent=`🏆 60 LEVELS COMPLETE! ${time.toFixed(2)}s!`;
+}
+}
+function reset(){startLevel(levelIndex)}
+$("restart").onclick=reset;$("back").onclick=()=>{stopTimer();renderLevels();show("levels")};
+document.addEventListener("keydown",e=>{
+const m={ArrowUp:[-1,0],w:[-1,0],W:[-1,0],ArrowDown:[1,0],s:[1,0],S:[1,0],ArrowLeft:[0,-1],a:[0,-1],A:[0,-1],ArrowRight:[0,1],d:[0,1],D:[0,1]}[e.key];
+if(m){e.preventDefault();move(...m)}
+});
+document.querySelectorAll("[data-move]").forEach(b=>b.onclick=()=>{const d=b.dataset.move;if(d==="up")move(-1,0);if(d==="down")move(1,0);if(d==="left")move(0,-1);if(d==="right")move(0,1)});
+renderLevels();renderShop();
+show("game");
+startLevel(0);
+</script>
+</body>
+</html>
